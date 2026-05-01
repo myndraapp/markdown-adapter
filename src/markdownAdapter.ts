@@ -388,7 +388,7 @@ const addReferenceEdge = (graph: GraphAPI, sourceKey: string, targetKey: string)
   return graph.durable.addReferenceLink(
     sourceKey,
     targetKey,
-    MyndlinkAttributesSchema.parse({ ...referenceEdgeDefaults }),
+    MyndlinkAttributesSchema.parse({ ...referenceEdgeDefaults, direction: 'outgoing' }),
   )
 }
 
