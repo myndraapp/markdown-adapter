@@ -8,10 +8,10 @@
  *
  * The root directory already contains myndra-plugin.json, assets/, and the .wasm file.
  *
- * Usage:  node build.mjs
+ * Usage:  node build.mjs [--watch]
  */
 
-import { build } from 'esbuild'
+import { build, context } from 'esbuild'
 import { myndraHostModules } from '@myndra/plugin-sdk/build'
 import { join, dirname } from 'node:path'
 import { mkdirSync } from 'node:fs'
@@ -19,11 +19,11 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const outDir = join(__dirname, 'dist')
+const watchMode = process.argv.includes('--watch')
 
 mkdirSync(outDir, { recursive: true })
 
-console.log('Building markdown-adapter...')
-await build({
+const options = {
   entryPoints: [join(__dirname, 'src/index.ts')],
   bundle: true,
   format: 'esm',
@@ -32,5 +32,14 @@ await build({
   treeShaking: true,
   sourcemap: true,
   plugins: [myndraHostModules()],
-})
-console.log('Done. Output in dist/')
+}
+
+if (watchMode) {
+  const ctx = await context(options)
+  await ctx.watch()
+  console.log('Watching markdown-adapter for changes...')
+} else {
+  console.log('Building markdown-adapter...')
+  await build(options)
+  console.log('Done. Output in dist/')
+}

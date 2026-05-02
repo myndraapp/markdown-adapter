@@ -1,6 +1,8 @@
 {
     "name": "myndra.plugin.markdown-adapter",
+    "displayName": "Markdown Adapter",
     "version": "0.1.0",
+    "engine": ">=0.0.0",
     "description": "Syntax highlighting and file tagging for Markdown files",
     "entry": "./dist/index.js",
     "author": "Lucas Müller",
@@ -21,7 +23,7 @@
             ".md",
             ".markdown"
         ],
-        "wasmPath": "./tree-sitter-markdown.wasm",
+        "wasmPath": "./assets/tree-sitter-markdown.wasm",
         "languageName": "markdown"
     }
 }

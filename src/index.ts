@@ -1,26 +1,18 @@
 import type { MyndraPluginModule, Tree, AdapterMutationResult } from '@myndra/plugin-sdk'
 import { markdown } from '@codemirror/lang-markdown'
+import { MD_KINDS, MD_TAG_KIND, isMarkdownFileNode } from './kinds'
+import { getTagGlyph, initializeGlyphs } from './glyphs'
 import {
-  MD_KINDS,
-  MD_TAG_KIND,
-  getTagGlyph,
-  initializeGlyphs,
-  isMarkdownFileNode,
   buildMarkdownFileIndex,
   resolveWikiLinkTarget,
   ensureTagNode,
   addReferenceEdge,
   extractMarkdownReferences,
-  parseMarkdownContent,
-  buildMarkdownGraphFromTree,
-  createMarkdownAdapter,
   type MarkdownReferenceData,
-  MARKDOWN_ADAPTER_ID,
-} from './markdownAdapter'
-import {
-  createSessionGraphCollector,
-  type SessionGraphPayload,
-} from '@myndra/plugin-sdk/helpers'
+} from './references'
+import { parseMarkdownContent, buildMarkdownGraphFromTree } from './treeParser'
+import { createMarkdownAdapter, MARKDOWN_ADAPTER_ID } from './hierarchy'
+import { createSessionGraphCollector, type SessionGraphPayload } from '@myndra/plugin-sdk/helpers'
 
 const normalizePath = (input: string) => input.replace(/\\/g, '/')
 
@@ -66,17 +58,17 @@ const plugin: MyndraPluginModule = {
     unregisterPreview = () => ctx.filePreview.unregisterAdapter()
 
     // Initialize glyph paths relative to the plugin's asset base URL.
-    initializeGlyphs((name) => ctx.resolveAsset(name))
+    initializeGlyphs((name) => ctx.resolveAsset(`assets/${name}`))
 
-    ctx.glyphs.register(MD_KINDS.HEADING, ctx.resolveAsset('title.png'))
-    ctx.glyphs.register(MD_KINDS.PARAGRAPH, ctx.resolveAsset('notes.png'))
-    ctx.glyphs.register(MD_KINDS.LIST, ctx.resolveAsset('format_list_bulleted.svg'))
-    ctx.glyphs.register(MD_KINDS.LIST_ITEM, ctx.resolveAsset('chevron_right.png'))
-    ctx.glyphs.register(MD_KINDS.CODE_BLOCK, ctx.resolveAsset('code.png'))
-    ctx.glyphs.register(MD_KINDS.BLOCKQUOTE, ctx.resolveAsset('format_quote.png'))
-    ctx.glyphs.register(MD_KINDS.HR, ctx.resolveAsset('horizontal_rule.png'))
-    ctx.glyphs.register(MD_KINDS.TABLE, ctx.resolveAsset('table.png'))
-    ctx.glyphs.register(MD_KINDS.HTML, ctx.resolveAsset('code.png'))
+    ctx.glyphs.register(MD_KINDS.HEADING, ctx.resolveAsset('assets/title.png'))
+    ctx.glyphs.register(MD_KINDS.PARAGRAPH, ctx.resolveAsset('assets/notes.png'))
+    ctx.glyphs.register(MD_KINDS.LIST, ctx.resolveAsset('assets/format_list_bulleted.svg'))
+    ctx.glyphs.register(MD_KINDS.LIST_ITEM, ctx.resolveAsset('assets/chevron_right.png'))
+    ctx.glyphs.register(MD_KINDS.CODE_BLOCK, ctx.resolveAsset('assets/code.png'))
+    ctx.glyphs.register(MD_KINDS.BLOCKQUOTE, ctx.resolveAsset('assets/format_quote.png'))
+    ctx.glyphs.register(MD_KINDS.HR, ctx.resolveAsset('assets/horizontal_rule.png'))
+    ctx.glyphs.register(MD_KINDS.TABLE, ctx.resolveAsset('assets/table.png'))
+    ctx.glyphs.register(MD_KINDS.HTML, ctx.resolveAsset('assets/code.png'))
     ctx.glyphs.register(MD_TAG_KIND, getTagGlyph())
     const mdStructureAdapter = createMarkdownAdapter(ctx)
 
