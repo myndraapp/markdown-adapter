@@ -24,9 +24,10 @@ export type MdKind = (typeof MD_KINDS)[keyof typeof MD_KINDS]
 
 export const ALL_MD_KINDS: readonly string[] = Object.values(MD_KINDS)
 export const MD_TAG_KIND = 'md:tag'
+export const MD_WIKILINK_KIND = 'md:wikilink'
 export const MD_EXT_NAMESPACE = 'markdown-adapter'
 export const MD_NODE_COLOR = '#7E57C2'
-export const MD_TAG_COLOR = '#9C27B0'
+export const MD_TAG_COLOR = '#2E7D32'
 
 export const MARKDOWN_ADAPTER_ID = 'markdown-adapter'
 

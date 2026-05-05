@@ -13,6 +13,7 @@
         "treesitter:parse",
         "glyphs:register",
         "hierarchy:register",
+        "fileindex:register",
         "graph:read",
         "graph:write",
         "graph:session",

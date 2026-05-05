@@ -133,3 +133,5 @@ export const getBlockquoteGlyph = (node: Node): string | null => {
 }
 
 export const getTagGlyph = () => resolve('segment.png')
+
+export const getWikiLinkGlyph = () => resolve('link.png')

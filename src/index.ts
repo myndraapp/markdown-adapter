@@ -1,11 +1,12 @@
 import type { MyndraPluginModule, Tree, AdapterMutationResult } from '@myndra/plugin-sdk'
 import { markdown } from '@codemirror/lang-markdown'
-import { MD_KINDS, MD_TAG_KIND, isMarkdownFileNode } from './kinds'
-import { getTagGlyph, initializeGlyphs } from './glyphs'
+import { MD_KINDS, MD_TAG_KIND, MD_WIKILINK_KIND, isMarkdownFileNode } from './kinds'
+import { getTagGlyph, getWikiLinkGlyph, initializeGlyphs } from './glyphs'
 import {
   buildMarkdownFileIndex,
   resolveWikiLinkTarget,
   ensureTagNode,
+  ensureWikiLinkNode,
   addReferenceEdge,
   extractMarkdownReferences,
   type MarkdownReferenceData,
@@ -17,8 +18,11 @@ import { createSessionGraphCollector, type SessionGraphPayload } from '@myndra/p
 const normalizePath = (input: string) => input.replace(/\\/g, '/')
 
 let unregisterPreview: (() => void) | null = null
+let registeredMatcherId: string | null = null
+let unregisterMatcher: (() => void) | null = null
 
 const MARKDOWN_EXTENSIONS = ['.md', '.markdown']
+const MATCHER_ID = 'markdown-adapter.files'
 
 const plugin: MyndraPluginModule = {
   extensions: () => MARKDOWN_EXTENSIONS,
@@ -26,6 +30,21 @@ const plugin: MyndraPluginModule = {
     MARKDOWN_EXTENSIONS.forEach((extension) =>
       ctx.editor.registerExtensions(extension, [markdown()]),
     )
+
+    registeredMatcherId = ctx.fileIndex.registerMatcher({
+      id: MATCHER_ID,
+      matches: (node) => isMarkdownFileNode(node.attributes),
+    })
+    unregisterMatcher = () => {
+      if (!registeredMatcherId) return
+      ctx.fileIndex.unregisterMatcher(registeredMatcherId)
+      registeredMatcherId = null
+    }
+
+    const getMarkdownFileIndex = () => {
+      const indexedFiles = registeredMatcherId ? ctx.fileIndex.getMatches(registeredMatcherId) : []
+      return buildMarkdownFileIndex(ctx, indexedFiles)
+    }
 
     ctx.filePreview.registerAdapter({
       extensions: MARKDOWN_EXTENSIONS,
@@ -40,7 +59,7 @@ const plugin: MyndraPluginModule = {
           buildMarkdownGraphFromTree(collector.graph, nodeKey, tree, fileScope)
         }
 
-        const fileIndex = buildMarkdownFileIndex(ctx)
+        const fileIndex = getMarkdownFileIndex()
         for (const tag of references.tags) {
           const tagKey = ensureTagNode(collector.graph, tag)
           addReferenceEdge(collector.graph, nodeKey, tagKey)
@@ -48,8 +67,9 @@ const plugin: MyndraPluginModule = {
 
         for (const target of references.wikiTargets) {
           const resolved = resolveWikiLinkTarget(collector.graph, fileIndex, nodeKey, target)
-          if (!resolved || resolved === nodeKey) continue
-          addReferenceEdge(collector.graph, nodeKey, resolved)
+          const targetKey = resolved ?? ensureWikiLinkNode(collector.graph, target)
+          if (targetKey === nodeKey) continue
+          addReferenceEdge(collector.graph, nodeKey, targetKey)
         }
 
         return collector.getPayload()
@@ -70,6 +90,7 @@ const plugin: MyndraPluginModule = {
     ctx.glyphs.register(MD_KINDS.TABLE, ctx.resolveAsset('assets/table.png'))
     ctx.glyphs.register(MD_KINDS.HTML, ctx.resolveAsset('assets/code.png'))
     ctx.glyphs.register(MD_TAG_KIND, getTagGlyph())
+    ctx.glyphs.register(MD_WIKILINK_KIND, getWikiLinkGlyph())
     const mdStructureAdapter = createMarkdownAdapter(ctx)
 
     const allMdKinds = Object.values(MD_KINDS)
@@ -202,8 +223,9 @@ const plugin: MyndraPluginModule = {
 
       for (const target of references.wikiTargets) {
         const resolvedKey = resolveWikiLinkTarget(graph, fileIndex, nodeKey, target)
-        if (!resolvedKey || resolvedKey === nodeKey) continue
-        addReferenceEdge(graph, nodeKey, resolvedKey)
+        const targetKey = resolvedKey ?? ensureWikiLinkNode(graph, target)
+        if (targetKey === nodeKey) continue
+        addReferenceEdge(graph, nodeKey, targetKey)
       }
     }
 
@@ -212,7 +234,7 @@ const plugin: MyndraPluginModule = {
       if (parsed.tree) {
         buildMarkdownGraphFromTree(collector.graph, parsed.nodeKey, parsed.tree, parsed.fileScope)
       }
-      const fileIndex = buildMarkdownFileIndex(ctx)
+      const fileIndex = getMarkdownFileIndex()
       addReferenceEdges(collector.graph, parsed.nodeKey, parsed.references, fileIndex)
       return collector.getPayload()
     }
@@ -316,7 +338,7 @@ const plugin: MyndraPluginModule = {
         }
       }
 
-      const fileIndex = buildMarkdownFileIndex(ctx)
+      const fileIndex = getMarkdownFileIndex()
       for (const parsed of parsedEntries) {
         addReferenceEdges(collector.graph, parsed.nodeKey, parsed.references, fileIndex)
       }
@@ -380,9 +402,14 @@ const plugin: MyndraPluginModule = {
   },
 
   deactivate() {
-    if (!unregisterPreview) return
-    unregisterPreview()
-    unregisterPreview = null
+    if (unregisterPreview) {
+      unregisterPreview()
+      unregisterPreview = null
+    }
+    if (unregisterMatcher) {
+      unregisterMatcher()
+      unregisterMatcher = null
+    }
   },
 }
 

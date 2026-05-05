@@ -1,14 +1,15 @@
 import { MyndlinkAttributesSchema } from '@myndra/plugin-sdk/schemas'
-import type { PluginContext, GraphAPI } from '@myndra/plugin-sdk'
+import type { GraphAPI, IndexedFile, PluginContext } from '@myndra/plugin-sdk'
 import {
   MD_KINDS,
   MD_TAG_KIND,
-  referenceEdgeDefaults,
-  isMarkdownFileNode,
+  MD_WIKILINK_KIND,
   buildMdNodeAttributes,
+  isMarkdownFileNode,
   normalizeWhitespace,
+  referenceEdgeDefaults,
 } from './kinds'
-import { getTagGlyph } from './glyphs'
+import { getTagGlyph, getWikiLinkGlyph } from './glyphs'
 
 const TAG_PATTERN = /#[0-9]*[A-Za-z_/-][A-Za-z0-9_/-]*/g
 const WIKI_LINK_PATTERN = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g
@@ -20,12 +21,21 @@ const stripMarkdownCode = (value: string) => stripInlineCode(stripFencedCode(val
 
 const normalizeTag = (value: string) => value.slice(1).trim().toLowerCase()
 
-const normalizeWikiTarget = (value: string) => normalizeWhitespace(value).replace(/\\/g, '/')
+export const normalizeWikiTarget = (value: string) => normalizeWhitespace(value).replace(/\\/g, '/')
+
+const stripWikiAlias = (value: string) => value.split('|', 2)[0] ?? value
+
+const normalizeIndexPath = (value: string) => normalizeWikiTarget(value).replace(/^\/+/, '')
 
 const stripMarkdownExtension = (value: string) => value.replace(/\.(markdown|md)$/i, '')
 
+const dirname = (value: string) => {
+  const index = value.lastIndexOf('/')
+  return index >= 0 ? value.slice(0, index) : ''
+}
+
 const splitWikiTarget = (value: string) => {
-  const normalized = normalizeWikiTarget(value)
+  const normalized = normalizeWikiTarget(stripWikiAlias(value))
   const [pathPart, headingPart] = normalized.split('#', 2)
   return {
     path: pathPart.trim(),
@@ -39,22 +49,52 @@ const normalizeHeadingLabel = (value: string) =>
 export type MarkdownFileIndexEntry = {
   key: string
   path: string
-  pathLower: string
   pathNoExtLower: string
+  dirLower: string
   stemLower: string
 }
 
-export const buildMarkdownFileIndex = (ctx: PluginContext): MarkdownFileIndexEntry[] =>
+const createMarkdownFileIndexEntry = (key: string, path: string): MarkdownFileIndexEntry => {
+  const normalizedPath = normalizeIndexPath(path)
+  const pathLower = normalizedPath.toLowerCase()
+  const pathNoExtLower = stripMarkdownExtension(pathLower)
+  const stemLower = pathNoExtLower.split('/').pop() ?? pathNoExtLower
+  return {
+    key,
+    path: normalizedPath,
+    pathNoExtLower,
+    dirLower: dirname(pathNoExtLower),
+    stemLower,
+  }
+}
+
+export const buildMarkdownFileIndexFromFiles = (
+  files: readonly IndexedFile[],
+): MarkdownFileIndexEntry[] =>
+  files
+    .filter((file) => Boolean(file.path) && isMarkdownFileNode(file.attributes))
+    .map((file) => createMarkdownFileIndexEntry(file.nodeKey, file.path))
+
+export const buildMarkdownFileIndex = (
+  ctx: PluginContext,
+  files?: readonly IndexedFile[],
+): MarkdownFileIndexEntry[] => {
+  const entriesByKey = new Map<string, MarkdownFileIndexEntry>()
+
   ctx.graph
     .findNodes(({ attributes }) => Boolean(attributes.path) && isMarkdownFileNode(attributes))
-    .map((node) => {
-      const path = node.attributes.path ?? ''
-      const normalizedPath = normalizeWikiTarget(path)
-      const pathLower = normalizedPath.toLowerCase()
-      const pathNoExtLower = stripMarkdownExtension(pathLower)
-      const stemLower = pathNoExtLower.split('/').pop() ?? pathNoExtLower
-      return { key: node.key, path: normalizedPath, pathLower, pathNoExtLower, stemLower }
+    .forEach((node) => {
+      entriesByKey.set(node.key, createMarkdownFileIndexEntry(node.key, node.attributes.path ?? ''))
     })
+
+  if (files) {
+    buildMarkdownFileIndexFromFiles(files).forEach((entry) => {
+      entriesByKey.set(entry.key, entry)
+    })
+  }
+
+  return Array.from(entriesByKey.values())
+}
 
 const findHeadingNode = (graph: GraphAPI, fileKey: string, heading: string): string | null => {
   const target = normalizeHeadingLabel(heading)
@@ -76,41 +116,67 @@ const findHeadingNode = (graph: GraphAPI, fileKey: string, heading: string): str
   return null
 }
 
+const uniqueMatch = (
+  entries: readonly MarkdownFileIndexEntry[],
+  predicate: (entry: MarkdownFileIndexEntry) => boolean,
+): MarkdownFileIndexEntry | null => {
+  const byKey = new Map<string, MarkdownFileIndexEntry>()
+  for (const entry of entries) {
+    if (predicate(entry)) byKey.set(entry.key, entry)
+  }
+  return byKey.size === 1 ? Array.from(byKey.values())[0] : null
+}
+
+const resolveWikiFileTarget = (
+  fileIndex: readonly MarkdownFileIndexEntry[],
+  sourceFileKey: string,
+  rawPath: string,
+): string | null => {
+  const targetLower = normalizeIndexPath(rawPath).toLowerCase()
+  const targetNoExtLower = stripMarkdownExtension(targetLower)
+  const isPathLike = targetLower.includes('/')
+  const sourceEntry = fileIndex.find((entry) => entry.key === sourceFileKey)
+  const sourceDirLower = sourceEntry?.dirLower ?? ''
+
+  if (isPathLike) {
+    const sourceRelativeCandidate = sourceDirLower
+      ? `${sourceDirLower}/${targetNoExtLower}`
+      : targetNoExtLower
+
+    const match =
+      uniqueMatch(fileIndex, (entry) => entry.pathNoExtLower === sourceRelativeCandidate) ??
+      uniqueMatch(fileIndex, (entry) => entry.pathNoExtLower === targetNoExtLower) ??
+      uniqueMatch(
+        fileIndex,
+        (entry) =>
+          entry.pathNoExtLower === targetNoExtLower ||
+          entry.pathNoExtLower.endsWith(`/${targetNoExtLower}`),
+      )
+
+    return match?.key ?? null
+  }
+
+  const match =
+    uniqueMatch(
+      fileIndex,
+      (entry) => entry.dirLower === sourceDirLower && entry.stemLower === targetNoExtLower,
+    ) ?? uniqueMatch(fileIndex, (entry) => entry.stemLower === targetNoExtLower)
+
+  return match?.key ?? null
+}
+
 export const resolveWikiLinkTarget = (
   graph: GraphAPI,
-  fileIndex: MarkdownFileIndexEntry[],
+  fileIndex: readonly MarkdownFileIndexEntry[],
   sourceFileKey: string,
   rawTarget: string,
 ): string | null => {
   const { path, heading } = splitWikiTarget(rawTarget)
-  let resolvedKey: string | null = null
-
-  if (!path) {
-    resolvedKey = sourceFileKey
-  } else {
-    const targetLower = normalizeWikiTarget(path).toLowerCase()
-    const targetNoExtLower = stripMarkdownExtension(targetLower)
-    const isPathLike = targetLower.includes('/')
-
-    const match = fileIndex.find((entry) => {
-      if (isPathLike) {
-        return (
-          entry.pathNoExtLower === targetNoExtLower ||
-          entry.pathLower === targetLower ||
-          entry.pathLower.endsWith(`/${targetNoExtLower}`)
-        )
-      }
-      return (
-        entry.stemLower === targetNoExtLower ||
-        entry.pathNoExtLower.endsWith(`/${targetNoExtLower}`)
-      )
-    })
-    resolvedKey = match?.key ?? null
-  }
+  const resolvedKey = path ? resolveWikiFileTarget(fileIndex, sourceFileKey, path) : sourceFileKey
 
   if (!resolvedKey) return null
-  if (!heading) return resolvedKey
-  return findHeadingNode(graph, resolvedKey, heading) ?? resolvedKey
+  if (heading) return findHeadingNode(graph, resolvedKey, heading)
+  return resolvedKey
 }
 
 export const extractMarkdownReferences = (content: string) => {
@@ -177,3 +243,20 @@ export const ensureTagNode = (graph: GraphAPI, tagName: string): string =>
       { stableId: `md:tag:${tagName}`, tagName },
     ),
   )
+
+export const ensureWikiLinkNode = (graph: GraphAPI, rawTarget: string): string => {
+  const normalizedTarget = normalizeWikiTarget(stripWikiAlias(rawTarget))
+  return graph.durable.addNode(
+    buildMdNodeAttributes(
+      {
+        kind: MD_WIKILINK_KIND,
+        label: `[[${normalizedTarget}]]`,
+        image: getWikiLinkGlyph(),
+      },
+      {
+        stableId: `md:wikilink:${normalizedTarget.toLowerCase()}`,
+        wikiTarget: normalizedTarget,
+      },
+    ),
+  )
+}
