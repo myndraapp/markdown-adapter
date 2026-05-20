@@ -8,16 +8,12 @@ import {
   ensureTagNode,
   ensureWikiLinkNode,
   addReferenceEdge,
-  extractMarkdownReferences,
   type MarkdownReferenceData,
 } from './references'
 import { parseMarkdownContent, buildMarkdownGraphFromTree } from './treeParser'
 import { createMarkdownAdapter, MARKDOWN_ADAPTER_ID } from './hierarchy'
 import { createSessionGraphCollector, type SessionGraphPayload } from '@myndra/plugin-sdk/helpers'
 
-const normalizePath = (input: string) => input.replace(/\\/g, '/')
-
-let unregisterPreview: (() => void) | null = null
 let registeredMatcherId: string | null = null
 let unregisterMatcher: (() => void) | null = null
 
@@ -45,37 +41,6 @@ const plugin: MyndraPluginModule = {
       const indexedFiles = registeredMatcherId ? ctx.fileIndex.getMatches(registeredMatcherId) : []
       return buildMarkdownFileIndex(ctx, indexedFiles)
     }
-
-    ctx.filePreview.registerAdapter({
-      extensions: MARKDOWN_EXTENSIONS,
-      buildDraftPayload: async ({ nodeKey, filePath, content }) => {
-        const extension = filePath.toLowerCase().endsWith('.markdown') ? '.markdown' : '.md'
-        const tree = await ctx.treeSitter.parse(content, extension)
-        const references = extractMarkdownReferences(content)
-        const collector = createSessionGraphCollector()
-        const fileScope = normalizePath(filePath)
-
-        if (tree) {
-          buildMarkdownGraphFromTree(collector.graph, nodeKey, tree, fileScope)
-        }
-
-        const fileIndex = getMarkdownFileIndex()
-        for (const tag of references.tags) {
-          const tagKey = ensureTagNode(collector.graph, tag)
-          addReferenceEdge(collector.graph, nodeKey, tagKey)
-        }
-
-        for (const target of references.wikiTargets) {
-          const resolved = resolveWikiLinkTarget(collector.graph, fileIndex, nodeKey, target)
-          const targetKey = resolved ?? ensureWikiLinkNode(collector.graph, target)
-          if (targetKey === nodeKey) continue
-          addReferenceEdge(collector.graph, nodeKey, targetKey)
-        }
-
-        return collector.getPayload()
-      },
-    })
-    unregisterPreview = () => ctx.filePreview.unregisterAdapter()
 
     // Initialize glyph paths relative to the plugin's asset base URL.
     initializeGlyphs((name) => ctx.resolveAsset(`assets/${name}`))
@@ -202,6 +167,7 @@ const plugin: MyndraPluginModule = {
     const openFilesBySession = new Map<string, string>()
     const renderPayloadsByFile = new Map<string, SessionGraphPayload>()
     let scopeRequestId = 0
+    let scopeMode: 'focused' | 'full' = 'focused'
 
     type ParsedMarkdownEntry = {
       nodeKey: string
@@ -347,17 +313,13 @@ const plugin: MyndraPluginModule = {
       ctx.graph.session.inject({ nodes: payload.nodes, edges: payload.edges })
     }
 
-    const disableFullScope = () => {
-      scopeRequestId += 1
-      ctx.graph.session.clear()
-    }
-
     ctx.events.on('graph:plugin-scope', async ({ pluginId, scope }) => {
       if (pluginId !== ctx.manifest.name) return
+      scopeMode = scope
       if (scope === 'full') {
         await enableFullScope()
       } else {
-        disableFullScope()
+        ctx.graph.session.clear()
       }
     })
 
@@ -399,13 +361,21 @@ const plugin: MyndraPluginModule = {
         }
       }
     })
+
+    ctx.events.on('plugins:activated', async () => {
+      if (scopeMode === 'full') {
+        await enableFullScope()
+      }
+    })
+
+    ctx.events.on('graph:loaded', async () => {
+      if (scopeMode === 'full') {
+        await enableFullScope()
+      }
+    })
   },
 
   deactivate() {
-    if (unregisterPreview) {
-      unregisterPreview()
-      unregisterPreview = null
-    }
     if (unregisterMatcher) {
       unregisterMatcher()
       unregisterMatcher = null
